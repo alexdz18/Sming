@@ -386,5 +386,9 @@ endef
 	$(info Fetching submodule '$*' ...)
 	$(Q) cd $(abspath $*/..) && (rm -rf $(*F); $(GIT) submodule update --init --force --recursive $(*F))
 	$(Q) $(call TryApplyPatch,$*,$(*F).patch)
+	$(Q) if [ -f $(abspath $*/../.patches/$(*F).private.patch) ]; then \
+			$(info Applying user private patch after standard $(abspath $*/../.patches/$(*F).private.patch) ...) \
+			cd $* && $(call ApplyPatch,../.patches/$(*F).private.patch); \
+		fi
 	$(Q) touch $@
 
