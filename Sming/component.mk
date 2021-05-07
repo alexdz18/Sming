@@ -165,7 +165,7 @@ flashapp: all kill_term ##Write just the application image(s)
 .PHONY: flash
 flash: all kill_term ##Write the boot loader and all defined partition images
 	$(Q) $(call CheckPartitionChunks,$(FLASH_PARTITION_CHUNKS))
-	$(call WriteFlash,$(FLASH_BOOT_CHUNKS) $(FLASH_MAP_CHUNK) $(FLASH_PARTITION_CHUNKS))
+	$(call WriteFlash,$(FLASH_BOOT_CHUNKS) $(FLASH_BOOT_CONFIG_CHUNK) $(FLASH_MAP_CHUNK) $(FLASH_PARTITION_CHUNKS))
 ifeq ($(ENABLE_GDB), 1)
 	$(GDB_CMDLINE)
 else ifneq ($(SMING_ARCH),Host)
