@@ -1,0 +1,135 @@
+diff --git a/Makefile b/Makefile
+index f59bb8d..f810d24 100644
+--- a/Makefile
++++ b/Makefile
+@@ -30,6 +30,9 @@ E2_OPTS = -quiet -bin -boot0
+ 
+ CFLAGS += -DPARTITION_TABLE_OFFSET=$(PARTITION_TABLE_OFFSET)
+ 
++ifeq ($(RBOOT_CONFIG_OPROG),1)
++	CFLAGS += -DBOOT_CONFIG_OPROG
++endif
+ ifeq ($(RBOOT_BIG_FLASH),1)
+ 	CFLAGS += -DBOOT_BIG_FLASH
+ endif
+diff --git a/rboot.c b/rboot.c
+index 6470d9e..972f5dd 100644
+--- a/rboot.c
++++ b/rboot.c
+@@ -295,7 +295,11 @@ uint32_t NOINLINE find_image(void) {
+ #endif
+ 
+ 	echof("\r\nrBoot v1.4.2 - richardaburton@gmail.com\r\n");
+-
++#ifdef BOOT_CONFIG_OPROG
++	echof("IoTCrafter patch: 4\r\n");
++	echof("sz rboot_config=%d, sz rboot_config_oprog=%d\r\n",
++			sizeof(rboot_config), sizeof(rboot_config_oprog));
++#endif
+ 	// read rom header
+ 	SPIRead(0, header, sizeof(rom_header));
+ 
+@@ -393,14 +397,29 @@ uint32_t NOINLINE find_image(void) {
+ 	SPIRead(BOOT_CONFIG_SECTOR * SECTOR_SIZE, buffer, SECTOR_SIZE);
+ 	rboot_config *romconf = (rboot_config*)buffer;
+ 	// fresh install or old version?
++	bool is_valid_config = true;
++	bool have_oprog_config = false;
+ 	if (romconf->magic != BOOT_CONFIG_MAGIC || romconf->version != BOOT_CONFIG_VERSION
+ #ifdef BOOT_CONFIG_CHKSUM
+ 		|| romconf->chksum != calc_chksum((uint8_t*)romconf, (uint8_t*)&romconf->chksum)
+ #endif
+ 		) {
++			is_valid_config = false;
++		}
++
++#ifdef BOOT_CONFIG_OPROG
++	if (is_valid_config && romconf->oprog.magic == OPROG_MAGIC) {
++		/* Oprog config sets only 1st rom config - let it to correct this */
++		have_oprog_config = true;
++	}
++#endif
++
++	if (!is_valid_config || have_oprog_config) {
+ 		// create a default config for a standard 2 rom setup
+-		echof("Resetting boot config.\r\n");
+-		ets_memset(romconf, 0x00, sizeof(rboot_config));
++		if (!is_valid_config) {
++			echof("Resetting boot config.\r\n");
++			ets_memset(romconf, 0x00, sizeof(rboot_config));
++		}
+ 		romconf->magic = BOOT_CONFIG_MAGIC;
+ 		romconf->version = BOOT_CONFIG_VERSION;
+ #if defined(BOOT_BIG_FLASH) && defined(BOOT_GPIO_ENABLED)
+diff --git a/rboot.h b/rboot.h
+index 0ede300..b4bc778 100644
+--- a/rboot.h
++++ b/rboot.h
+@@ -92,6 +92,55 @@ extern "C" {
+ #define MAX_ROMS 4
+ #endif
+ 
++/*
++ * IoTCrafter patch
++ * - introduces RBOOT_CONFIG_OPROG make option which enables IoTCrafter code
++ * -- adds IoTCrafter config structure in order to pass pre-set networking configuration when flashed RRH firmware
++ * -- modifies resetting rboot configuration: doesn't reset whole configuration 
++ *    but re-uses the code setting defaults when IoTCrafter config detected
++ */
++//#define BOOT_CONFIG_OPROG 	/* enables IoTCrafter's code unconditionally */
++#ifdef BOOT_CONFIG_OPROG
++
++#define OPROG_MAGIC					0xb6c3
++#define OPROG_NODE_NAME_SIZE_MAX	32  /* =max of SSID length, see 802.11-2007, we use 31 + terminating 0 */
++#define OPROG_AP_PASS_SIZE_MAX		32  /* we use 31 + terminating 0 */
++
++#define OPROG_BCONF_INIT		0x0001	///< Config contains pre-flashed settings
++#define OPROG_BCONF_NODE_INFO	0x0002	///< Config contains information about Oprog-node installed (app_version and node_name)
++#define OPROG_BCONF_VER_EX_DATE	0x0004	///< version date extension is valid: timestamp (YYYYMMddHHmmss) for dirty build
++
++#define OPROG_GIT_COMMIT_SIZE_MAX	8	// 7 chars + 1 zero terminator
++
++typedef struct {
++	uint16_t magic;	///< Magic, identifies rBoot Oprog data, used uint16 to distinct it from uint8 chksum
++	uint16_t flags;
++
++	uint32_t app_version; ///< LE value of app verison
++	uint8_t node_name[OPROG_NODE_NAME_SIZE_MAX];
++
++	uint8_t ap_ssid[32];
++	uint8_t ap_pass[OPROG_AP_PASS_SIZE_MAX];
++
++	struct {
++		// 2 bytes
++		uint16_t git_num;	// valid if > 0, if == 0, then git_num and git_commit is not used
++		// 8 bytes
++		uint8_t git_commit[OPROG_GIT_COMMIT_SIZE_MAX];
++		// 6 bytes
++		struct {
++			uint8_t year; // real year = (2020 + year) - up to 2275
++			uint8_t mon;
++			uint8_t mday;
++			uint8_t hour;
++			uint8_t min;
++			uint8_t sec;
++		} dt;
++	} app_version_ex;
++} rboot_config_oprog;
++// 2 + 2 + 4 + 32 + 32 + 32 + 2 + 8 + 6 = 120 bytes
++#endif /* BOOT_CONFIG_OPROG */
++
+ /** @brief  Structure containing rBoot configuration
+  *  @note   ROM addresses must be multiples of 0x1000 (flash sector aligned).
+  *          Without BOOT_BIG_FLASH only the first 8Mbit (1MB) of the chip will
+@@ -111,6 +160,11 @@ typedef struct {
+ 	uint8_t count;           ///< Quantity of ROMs available to boot
+ 	uint8_t unused[2];       ///< Padding (not used)
+ 	uint32_t roms[MAX_ROMS]; ///< Flash addresses of each ROM
++
++#ifdef BOOT_CONFIG_OPROG
++	rboot_config_oprog oprog;
++#endif
++
+ #ifdef BOOT_CONFIG_CHKSUM
+ 	uint8_t chksum;          ///< Checksum of this configuration structure (if BOOT_CONFIG_CHKSUM defined)
+ #endif
